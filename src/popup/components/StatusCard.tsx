@@ -1,15 +1,47 @@
 import React from "react";
 import { MeetingAttendanceData, ParticipantSummaryStats } from "../../types/attendance";
 import { formatDuration, formatTime } from "../../utils/time";
-import { Clock, AlertTriangle } from "lucide-react";
+import { Clock, AlertTriangle, RefreshCw } from "lucide-react";
 
 interface StatusCardProps {
   data: MeetingAttendanceData | null;
   stats: ParticipantSummaryStats;
+  detectedMeetingCode?: string | null;
+  needsReload?: boolean;
+  onReloadTab?: () => void;
 }
 
-export const StatusCard: React.FC<StatusCardProps> = ({ data, stats }) => {
+export const StatusCard: React.FC<StatusCardProps> = ({
+  data,
+  stats,
+  detectedMeetingCode,
+  needsReload,
+  onReloadTab,
+}) => {
   if (!data) {
+    if (needsReload || detectedMeetingCode) {
+      return (
+        <div className="p-4 bg-white dark:bg-attendly-card-dark rounded-xl border border-attendly-teal/20 dark:border-attendly-mint/20 shadow-sm mx-4 mt-3 text-center space-y-2">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            Meeting Detected: {detectedMeetingCode || "Google Meet"}
+          </div>
+          <p className="text-xs text-attendly-text-secondary dark:text-attendly-text-darkSecondary">
+            To activate Attendly on this meeting tab, please reload the tab once.
+          </p>
+          {onReloadTab && (
+            <button
+              onClick={onReloadTab}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-attendly-teal text-attendly-mint font-semibold text-xs hover:bg-attendly-teal-600 transition-all shadow-xs"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Reload Tab & Connect
+            </button>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div className="p-4 bg-white dark:bg-attendly-card-dark rounded-xl border border-gray-100 dark:border-gray-800 shadow-sm mx-4 mt-3 text-center">
         <p className="text-sm font-medium text-attendly-text-secondary dark:text-attendly-text-darkSecondary">

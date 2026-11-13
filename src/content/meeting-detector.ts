@@ -12,11 +12,12 @@ export interface MeetPageStatus {
   meetingTitle: string | null;
 }
 
-const MEET_CODE_REGEX = /^\/([a-z]{3}-[a-z]{4}-[a-z]{3})/i;
+const MEET_CODE_REGEX = /\b([a-z]{3}-[a-z]{4}-[a-z]{3})\b/i;
 
 export class MeetingDetector {
-  public static extractMeetingCode(pathname = window.location.pathname): string | null {
-    const match = pathname.match(MEET_CODE_REGEX);
+  public static extractMeetingCode(urlOrPath = window.location.pathname): string | null {
+    // Check path or full URL for standard 3-4-3 meeting code pattern
+    const match = urlOrPath.match(MEET_CODE_REGEX);
     return match ? match[1].toLowerCase() : null;
   }
 

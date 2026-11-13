@@ -17,6 +17,8 @@ export const App: React.FC = () => {
   const [data, setData] = useState<MeetingAttendanceData | null>(null);
   const [config, setConfig] = useState<TrackingSessionConfig>(DEFAULT_CONFIG);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  const [detectedMeetingCode, setDetectedMeetingCode] = useState<string | null>(null);
+  const [needsReload, setNeedsReload] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [isDark, setIsDark] = useState(false);
@@ -47,33 +49,55 @@ export const App: React.FC = () => {
     });
 
     // Query active Google Meet tab
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tab = tabs[0];
-      if (tab?.id && tab.url?.includes("meet.google.com")) {
-        setActiveTabId(tab.id);
-        fetchMeetingState(tab.id);
-      } else {
-        // Check if there is any other open Meet tab
-        chrome.tabs.query({ url: "https://meet.google.com/*" }, (meetTabs) => {
-          if (meetTabs[0]?.id) {
-            setActiveTabId(meetTabs[0].id);
-            fetchMeetingState(meetTabs[0].id);
-          } else {
-            // Check if there is a saved recent draft
-            StorageService.getLastSessionDraft().then((draft) => {
-              if (draft) {
-                setData(draft);
-              }
-            });
-          }
-        });
-      }
-    });
+    const discoverTabs = () => {
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        let tab = tabs[0];
+        if (tab?.id && tab.url?.includes("meet.google.com")) {
+          handleFoundTab(tab);
+        } else {
+          // Fallback: check any currentWindow active tab or any meet tab
+          chrome.tabs.query({ active: true, currentWindow: true }, (cwTabs) => {
+            let cwTab = cwTabs[0];
+            if (cwTab?.id && cwTab.url?.includes("meet.google.com")) {
+              handleFoundTab(cwTab);
+            } else {
+              chrome.tabs.query({ url: "https://meet.google.com/*" }, (allMeetTabs) => {
+                if (allMeetTabs[0]?.id) {
+                  handleFoundTab(allMeetTabs[0]);
+                } else {
+                  // Check if there is a saved recent draft
+                  StorageService.getLastSessionDraft().then((draft) => {
+                    if (draft) {
+                      setData(draft);
+                    }
+                  });
+                }
+              });
+            }
+          });
+        }
+      });
+    };
+
+    const handleFoundTab = (tab: chrome.tabs.Tab) => {
+      if (!tab.id) return;
+      setActiveTabId(tab.id);
+
+      // Extract meeting code directly from tab URL
+      const codeMatch = tab.url?.match(/\b([a-z]{3}-[a-z]{4}-[a-z]{3})\b/i);
+      const code = codeMatch ? codeMatch[1].toLowerCase() : null;
+      setDetectedMeetingCode(code);
+
+      fetchMeetingState(tab.id, code);
+    };
+
+    discoverTabs();
 
     // Listen for live updates from content script
     const messageListener = (msg: any) => {
       if (msg.type === "MEETING_STATE_UPDATE" && msg.data) {
         setData(msg.data);
+        setNeedsReload(false);
       }
     };
     chrome.runtime.onMessage.addListener(messageListener);
@@ -89,15 +113,33 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  const fetchMeetingState = (tabId: number) => {
+  const fetchMeetingState = (tabId: number, fallbackCode: string | null) => {
     chrome.tabs.sendMessage(tabId, { type: "GET_MEETING_STATE" }, (response) => {
       if (chrome.runtime.lastError) {
+        // Tab was already open before extension was installed/reloaded
+        setNeedsReload(true);
         return;
       }
       if (response?.data) {
         setData(response.data);
+        setNeedsReload(false);
+      } else if (response?.pageStatus?.meetingCode) {
+        setDetectedMeetingCode(response.pageStatus.meetingCode);
+      } else if (fallbackCode) {
+        setDetectedMeetingCode(fallbackCode);
       }
     });
+  };
+
+  const handleReloadTab = () => {
+    if (activeTabId) {
+      chrome.tabs.reload(activeTabId, {}, () => {
+        setNeedsReload(false);
+        setTimeout(() => {
+          if (activeTabId) fetchMeetingState(activeTabId, detectedMeetingCode);
+        }, 1200);
+      });
+    }
   };
 
   const sendTabMessage = (msg: any) => {
@@ -176,7 +218,13 @@ export const App: React.FC = () => {
         onToggleTheme={handleToggleTheme}
       />
 
-      <StatusCard data={data} stats={stats} />
+      <StatusCard
+        data={data}
+        stats={stats}
+        detectedMeetingCode={detectedMeetingCode}
+        needsReload={needsReload}
+        onReloadTab={handleReloadTab}
+      />
 
       <Controls
         trackingState={data?.trackingState || "not_in_meeting"}
