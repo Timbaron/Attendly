@@ -256,4 +256,103 @@ describe("Attendance Engine State Machine", () => {
     expect(stats.totalUnique).toBe(2);
     expect(stats.lateArrivals).toBe(1);
   });
+
+  it("unifies a participant initially detected as 'You' with user's real name and stops duration on departure", () => {
+    const meta: MeetingMetadata = {
+      meetingCode: "beq-yweg-pje",
+      title: "Team Call",
+      platform: "google-meet",
+      url: "https://meet.google.com/meet/beq-yweg-pje",
+    };
+
+    const initialData = createInitialMeetingData(meta, {
+      gracePeriodMinutes: 10,
+      expectedDurationMinutes: 60,
+      earlyDepartureThresholdMinutes: 5,
+      attendancePercentageThreshold: 75,
+      excludeHost: false,
+      timeFormat: "12h",
+      theme: "system",
+    });
+
+    const engine = new AttendanceEngine(initialData);
+    engine.startTracking("2026-11-13T12:00:00.000Z");
+
+    // 1. Initial frame: User alone, detected as "You"
+    engine.reconcileObservations({
+      observedList: [{ displayName: "You", isSelf: true }],
+      headerCount: 1,
+      peoplePanelOpen: false,
+      virtualizationDetected: false,
+      currentTimeIso: "2026-11-13T12:00:00.000Z",
+    });
+
+    expect(Object.keys(engine.getData().participants).length).toBe(1);
+    expect(Object.values(engine.getData().participants)[0].displayName).toBe("You");
+
+    // 2. Next frame: The ARK joins, user's real name "Akiode Timothy" is resolved
+    engine.reconcileObservations({
+      observedList: [
+        { displayName: "Akiode Timothy", isSelf: true },
+        { displayName: "The ARK", isSelf: false },
+      ],
+      headerCount: 2,
+      peoplePanelOpen: false,
+      virtualizationDetected: false,
+      currentTimeIso: "2026-11-13T12:01:00.000Z",
+    });
+
+    // Should NOT have 3 attendees! Exactly 2 attendees: "Akiode Timothy" and "The ARK"
+    const participants = Object.values(engine.getData().participants);
+    expect(participants.length).toBe(2);
+
+    const timothy = participants.find((p) => p.displayName === "Akiode Timothy");
+    const ark = participants.find((p) => p.displayName === "The ARK");
+    expect(timothy).toBeDefined();
+    expect(ark).toBeDefined();
+
+    // Timothy's firstJoinedAt should be the original 12:00:00 start
+    expect(timothy?.firstJoinedAt).toBe("2026-11-13T12:00:00.000Z");
+
+    // 3. The ARK leaves: missing for 3 consecutive reconciliation cycles
+    // Cycle 1 missing
+    engine.reconcileObservations({
+      observedList: [{ displayName: "Akiode Timothy", isSelf: true }],
+      headerCount: 1,
+      peoplePanelOpen: false,
+      virtualizationDetected: false,
+      currentTimeIso: "2026-11-13T12:02:00.000Z",
+    });
+    // Cycle 2 missing
+    engine.reconcileObservations({
+      observedList: [{ displayName: "Akiode Timothy", isSelf: true }],
+      headerCount: 1,
+      peoplePanelOpen: false,
+      virtualizationDetected: false,
+      currentTimeIso: "2026-11-13T12:02:02.000Z",
+    });
+    // Cycle 3 missing (threshold reached at 12:02:04)
+    engine.reconcileObservations({
+      observedList: [{ displayName: "Akiode Timothy", isSelf: true }],
+      headerCount: 1,
+      peoplePanelOpen: false,
+      virtualizationDetected: false,
+      currentTimeIso: "2026-11-13T12:02:04.000Z",
+    });
+
+    const updatedArk = engine.getData().participants[ark!.id];
+    // ARK must be marked 'left'
+    expect(updatedArk.status).toBe("left");
+    expect(updatedArk.lastLeftAt).toBe("2026-11-13T12:02:04.000Z");
+
+    // ARK's active session must be closed, duration locked at 64 seconds
+    expect(updatedArk.sessions[0].leftAt).toBe("2026-11-13T12:02:04.000Z");
+    expect(updatedArk.totalDurationMs).toBe(64 * 1000);
+
+    // Summary stats
+    const stats = engine.getSummaryStats();
+    expect(stats.totalUnique).toBe(2);
+    expect(stats.currentlyPresent).toBe(1);
+    expect(stats.confirmedDeparted).toBe(1);
+  });
 });

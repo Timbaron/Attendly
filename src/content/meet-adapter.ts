@@ -126,9 +126,27 @@ export class MeetAdapter {
   }
 
   /**
-   * Extracts the current user's display name from self tile or user profile.
+   * Extracts the current user's display name from Google Account profile or self tile.
    */
   public static getSelfName(): string {
+    // 1. Google Account profile button at top-right (most reliable and early)
+    const accountEl =
+      document.querySelector("[aria-label*='Google Account:' i]") ||
+      document.querySelector("a[aria-label*='Google Account' i]") ||
+      document.querySelector("button[aria-label*='Google Account' i]");
+
+    if (accountEl) {
+      const aria = accountEl.getAttribute("aria-label") || "";
+      const match = aria.match(/Google Account:\s*([^\n\r(]+)/i);
+      if (match && match[1]) {
+        const candidate = match[1].trim();
+        if (this.isValidParticipantName(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
+    // 2. Meet explicit data attributes
     const candidates = [
       document.querySelector("[data-self-name]")?.getAttribute("data-self-name"),
       document.querySelector("div[data-user-name]")?.getAttribute("data-user-name"),
@@ -138,6 +156,22 @@ export class MeetAdapter {
     for (const name of candidates) {
       if (name && this.isValidParticipantName(name)) {
         return name.replace(/\s*\((you|host)\)\s*/gi, "").trim();
+      }
+    }
+
+    // 3. Check for any video tile or badge containing (You)
+    const elementsWithYou = Array.from(
+      document.querySelectorAll(
+        "div[data-participant-id] span.zWGUib, div[data-participant-id] div.NWp9Yd, span.zWGUib, div.NWp9Yd"
+      )
+    );
+    for (const el of elementsWithYou) {
+      const text = el.textContent?.trim();
+      if (text && /\((you)\)/i.test(text)) {
+        const cleaned = text.replace(/\s*\((you|host)\)\s*/gi, "").trim();
+        if (this.isValidParticipantName(cleaned, el)) {
+          return cleaned;
+        }
       }
     }
 
@@ -206,6 +240,7 @@ export class MeetAdapter {
   public static readPeoplePanelParticipants(): ObservedParticipantRaw[] {
     const participants: ObservedParticipantRaw[] = [];
     const seenNames = new Set<string>();
+    const selfName = this.getSelfName();
 
     const items = Array.from(
       document.querySelectorAll(
@@ -215,9 +250,16 @@ export class MeetAdapter {
 
     for (const item of items) {
       const parsed = this.parseParticipantItem(item);
-      if (parsed && !seenNames.has(parsed.displayName.toLowerCase())) {
-        seenNames.add(parsed.displayName.toLowerCase());
-        participants.push(parsed);
+      if (parsed) {
+        const isSelf = /\((you)\)/i.test(parsed.displayName);
+        const cleanName = parsed.displayName.replace(/\s*\((you|host)\)\s*/gi, "").trim();
+        parsed.displayName = cleanName;
+        parsed.isSelf = isSelf || (selfName !== "You" && cleanName.toLowerCase() === selfName.toLowerCase());
+
+        if (!seenNames.has(cleanName.toLowerCase())) {
+          seenNames.add(cleanName.toLowerCase());
+          participants.push(parsed);
+        }
       }
     }
 
@@ -229,13 +271,18 @@ export class MeetAdapter {
       );
 
       for (const span of nameContainers) {
-        const name = span.textContent?.trim();
-        if (name && this.isValidParticipantName(name, span) && !seenNames.has(name.toLowerCase())) {
-          seenNames.add(name.toLowerCase());
-          participants.push({
-            displayName: name,
-            isHost: false,
-          });
+        const rawName = span.textContent?.trim();
+        if (rawName && this.isValidParticipantName(rawName, span)) {
+          const isSelf = /\((you)\)/i.test(rawName);
+          const cleanName = rawName.replace(/\s*\((you|host)\)\s*/gi, "").trim();
+          if (cleanName && !seenNames.has(cleanName.toLowerCase())) {
+            seenNames.add(cleanName.toLowerCase());
+            participants.push({
+              displayName: cleanName,
+              isHost: false,
+              isSelf: isSelf || (selfName !== "You" && cleanName.toLowerCase() === selfName.toLowerCase()),
+            });
+          }
         }
       }
     }
@@ -249,18 +296,9 @@ export class MeetAdapter {
   public static readGridParticipants(): ObservedParticipantRaw[] {
     const participants: ObservedParticipantRaw[] = [];
     const seenNames = new Set<string>();
-
-    // 1. Current user's self tile name (e.g. data-self-name="Timothy Akiode")
     const selfName = this.getSelfName();
-    if (selfName && this.isValidParticipantName(selfName)) {
-      seenNames.add(selfName.toLowerCase());
-      participants.push({
-        displayName: selfName,
-        isHost: false,
-      });
-    }
 
-    // 2. Specific participant name badge elements on other video tiles
+    // Target name badge selectors on video tiles
     const targetSelectors = [
       "div[data-requested-participant-id] span.zWGUib",
       "div[data-participant-id] span.zWGUib",
@@ -276,12 +314,37 @@ export class MeetAdapter {
     const elements = Array.from(document.querySelectorAll(targetSelectors.join(", ")));
 
     for (const el of elements) {
-      const name = el.getAttribute("data-name") || el.getAttribute("title") || el.textContent?.trim();
-      if (name && this.isValidParticipantName(name, el) && !seenNames.has(name.toLowerCase())) {
-        seenNames.add(name.toLowerCase());
+      const rawText = el.getAttribute("data-name") || el.getAttribute("title") || el.textContent?.trim();
+      if (!rawText) continue;
+
+      const isSelf = /\((you)\)/i.test(rawText);
+      const cleanName = rawText.replace(/\s*\((you|host)\)\s*/gi, "").trim();
+
+      if (cleanName && this.isValidParticipantName(cleanName, el) && !seenNames.has(cleanName.toLowerCase())) {
+        seenNames.add(cleanName.toLowerCase());
+
+        const tile = el.closest("div[data-participant-id], div[data-requested-participant-id]");
+        const imgEl = tile?.querySelector("img[src*='googleusercontent.com']");
+        const avatarUrl = imgEl ? (imgEl.getAttribute("src") || undefined) : undefined;
+
         participants.push({
-          displayName: name,
+          displayName: cleanName,
+          avatarUrl,
           isHost: false,
+          isSelf: isSelf || (selfName !== "You" && cleanName.toLowerCase() === selfName.toLowerCase()),
+        });
+      }
+    }
+
+    // Ensure self is included if grid didn't capture self yet
+    const hasSelf = participants.some((p) => p.isSelf || (selfName !== "You" && p.displayName.toLowerCase() === selfName.toLowerCase()));
+    if (!hasSelf && selfName) {
+      if (!seenNames.has(selfName.toLowerCase())) {
+        seenNames.add(selfName.toLowerCase());
+        participants.push({
+          displayName: selfName,
+          isHost: false,
+          isSelf: true,
         });
       }
     }
@@ -308,7 +371,7 @@ export class MeetAdapter {
     if (headerCount === 1) {
       // Exactly 1 person in the meeting: it's the current user!
       const selfName = this.getSelfName();
-      participants = [{ displayName: selfName, isHost: false }];
+      participants = [{ displayName: selfName, isHost: false, isSelf: true }];
     } else if (headerCount !== null && headerCount > 0 && participants.length > headerCount) {
       participants = participants.slice(0, headerCount);
     }

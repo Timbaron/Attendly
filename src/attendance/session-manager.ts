@@ -26,7 +26,7 @@ export class SessionManager {
   // Map of participant ID -> consecutive missed observation counts
   private missedCounts: Map<string, number> = new Map();
 
-  // Threshold of missed cycles before marking a participant departed (when panel is open)
+  // Threshold of missed cycles before marking a participant departed (default 3 cycles = ~6 seconds)
   private readonly MISSED_CYCLES_THRESHOLD = 3;
 
   /**
@@ -48,6 +48,34 @@ export class SessionManager {
     const participants: Record<string, ParticipantAttendance> = {
       ...data.participants,
     };
+
+    // Pre-pass: Unify any duplicate "You" records with the self participant
+    const youEntry = Object.values(participants).find(
+      (p) => p.displayName.trim().toLowerCase() === "you"
+    );
+    const selfEntry = Object.values(participants).find(
+      (p) =>
+        p.isSelf ||
+        (youEntry &&
+          p.id !== youEntry.id &&
+          options.observedList.some(
+            (r) => r.isSelf && r.displayName.toLowerCase() === p.displayName.toLowerCase()
+          ))
+    );
+
+    if (youEntry && selfEntry && youEntry.id !== selfEntry.id) {
+      selfEntry.firstJoinedAt =
+        new Date(youEntry.firstJoinedAt) < new Date(selfEntry.firstJoinedAt)
+          ? youEntry.firstJoinedAt
+          : selfEntry.firstJoinedAt;
+
+      selfEntry.sessions = [...youEntry.sessions, ...selfEntry.sessions].sort(
+        (a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime()
+      );
+      selfEntry.isSelf = true;
+      delete participants[youEntry.id];
+      this.missedCounts.delete(youEntry.id);
+    }
 
     const seenIdsInThisCycle = new Set<string>();
 
@@ -109,6 +137,7 @@ export class SessionManager {
           leftEarly: false,
           attendancePercentage: null,
           identityConfidence,
+          isSelf: raw.isSelf,
         };
 
         participants[id] = newRecord;
@@ -129,6 +158,18 @@ export class SessionManager {
           existingRecord.sessions = [...existingRecord.sessions, newSession];
         }
 
+        // If previously named "You", upgrade to real display name
+        if (
+          existingRecord.displayName.toLowerCase() === "you" &&
+          displayName.toLowerCase() !== "you"
+        ) {
+          existingRecord.displayName = displayName;
+        }
+
+        if (raw.isSelf) {
+          existingRecord.isSelf = true;
+        }
+
         // Update avatar if newly discovered
         if (raw.avatarUrl && !existingRecord.avatarUrl) {
           existingRecord.avatarUrl = raw.avatarUrl;
@@ -147,26 +188,19 @@ export class SessionManager {
       const currentMissed = (this.missedCounts.get(id) || 0) + 1;
       this.missedCounts.set(id, currentMissed);
 
-      // Only mark departed if:
-      // People panel is open (so we know full list is visible)
-      // AND not virtualized (or total count matches)
-      // AND participant has been missing for at least MISSED_CYCLES_THRESHOLD
-      const canConfirmDeparture =
-        options.peoplePanelOpen &&
-        !options.virtualizationDetected &&
-        currentMissed >= this.MISSED_CYCLES_THRESHOLD;
-
-      if (canConfirmDeparture) {
-        // Participant confirmed left
+      // Confirm departure when missed for threshold cycles
+      if (currentMissed >= this.MISSED_CYCLES_THRESHOLD) {
         p.status = "left";
         p.lastLeftAt = nowIso;
 
-        // Close active session
+        // CRITICAL: Close active session so duration stops accumulating!
         const activeSession = p.sessions[p.sessions.length - 1];
         if (activeSession && activeSession.leftAt === null) {
           activeSession.leftAt = nowIso;
-          activeSession.durationMs =
-            new Date(nowIso).getTime() - new Date(activeSession.joinedAt).getTime();
+          activeSession.durationMs = Math.max(
+            0,
+            new Date(nowIso).getTime() - new Date(activeSession.joinedAt).getTime()
+          );
         }
 
         // Evaluate early departure
@@ -177,12 +211,6 @@ export class SessionManager {
           data.config.expectedDurationMinutes,
           data.config.earlyDepartureThresholdMinutes
         );
-      } else if (
-        !options.peoplePanelOpen &&
-        currentMissed >= this.MISSED_CYCLES_THRESHOLD * 2
-      ) {
-        // If people panel is closed, mark status as unknown rather than fabricating a departure!
-        p.status = "unknown";
       }
     }
 
@@ -199,10 +227,7 @@ export class SessionManager {
     }
 
     // 4. Check for virtualization diagnostic
-    if (
-      options.virtualizationDetected &&
-      !data.virtualizationDetected
-    ) {
+    if (options.virtualizationDetected && !data.virtualizationDetected) {
       newDiagnostics.push({
         id: `diag_virt_${Date.now()}`,
         timestamp: nowIso,
@@ -260,24 +285,12 @@ export class SessionManager {
         nowIso
       );
 
-      const leftEarly =
-        reason === "stopped"
-          ? evaluateEarlyDeparture(
-              nowIso,
-              "left",
-              data.trackingStartedAt,
-              data.config.expectedDurationMinutes,
-              data.config.earlyDepartureThresholdMinutes
-            )
-          : p.leftEarly;
-
       participants[id] = {
         ...p,
+        status: reason === "stopped" ? "left" : p.status,
+        lastLeftAt: reason === "stopped" ? nowIso : p.lastLeftAt,
         sessions: updatedSessions,
         totalDurationMs,
-        status: reason === "stopped" ? "left" : p.status,
-        lastLeftAt: p.lastLeftAt || nowIso,
-        leftEarly,
         attendancePercentage: calculateAttendancePercentage(
           totalDurationMs,
           referenceDurationMs
@@ -329,13 +342,21 @@ export class SessionManager {
     data: MeetingAttendanceData,
     nowIso: string
   ): number {
+    if (data.config.expectedDurationMinutes) {
+      return data.config.expectedDurationMinutes * 60 * 1000;
+    }
+
     if (!data.trackingStartedAt) return 0;
+
     const startMs = new Date(data.trackingStartedAt).getTime();
     const endMs = data.trackingStoppedAt
       ? new Date(data.trackingStoppedAt).getTime()
       : new Date(nowIso).getTime();
 
-    if (isNaN(startMs) || isNaN(endMs) || endMs <= startMs) return 0;
+    if (isNaN(startMs) || isNaN(endMs) || endMs < startMs) {
+      return 0;
+    }
+
     return Math.max(0, endMs - startMs - data.totalPausedDurationMs);
   }
 }

@@ -29,7 +29,22 @@ export function resolveParticipantIdentity(
 } {
   const cleanName = normalizeDisplayName(raw.displayName || "Unknown Participant");
 
-  // If a raw participant ID from Google Meet is present
+  // 1. If this raw entry represents the self user, unify with any existing "You" or self record!
+  if (raw.isSelf) {
+    const existingSelf = Object.values(existingParticipants).find(
+      (p) => p.isSelf || normalizeDisplayName(p.displayName).toLowerCase() === "you"
+    );
+    if (existingSelf) {
+      return {
+        id: existingSelf.id,
+        displayName: cleanName.toLowerCase() !== "you" ? cleanName : existingSelf.displayName,
+        identityConfidence: "high",
+        isExisting: true,
+      };
+    }
+  }
+
+  // 2. If a raw participant ID from Google Meet is present
   if (raw.rawId) {
     const existing = existingParticipants[raw.rawId];
     if (existing) {
@@ -42,7 +57,7 @@ export function resolveParticipantIdentity(
     }
   }
 
-  // Look for existing participant by name and avatar (if available)
+  // 3. Look for existing participant by name and avatar (if available)
   const matches = Object.values(existingParticipants).filter(
     (p) => normalizeDisplayName(p.displayName).toLowerCase() === cleanName.toLowerCase()
   );

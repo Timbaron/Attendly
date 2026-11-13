@@ -34,6 +34,7 @@ export interface ParticipantAttendance {
   attendancePercentage: number | null;
   identityConfidence: IdentityConfidence;
   notes?: string;
+  isSelf?: boolean;
 }
 
 export interface DiagnosticRecord {
@@ -84,6 +85,7 @@ export interface ObservedParticipantRaw {
   displayName: string;
   avatarUrl?: string;
   isHost?: boolean;
+  isSelf?: boolean;
 }
 
 export interface ParticipantSummaryStats {
