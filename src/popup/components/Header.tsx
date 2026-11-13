@@ -17,20 +17,12 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="flex items-center justify-between px-4 py-3 bg-attendly-teal text-white border-b border-attendly-teal-600 shadow-sm">
       <div className="flex items-center gap-2.5">
-        <div className="w-8 h-8 rounded-lg bg-attendly-mint flex items-center justify-center shadow-inner">
-          <svg
-            className="w-5 h-5 text-attendly-teal"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-            <circle cx="9" cy="7" r="4" />
-            <polyline points="16 11 18 13 22 9" />
-          </svg>
+        <div className="w-8 h-8 rounded-lg overflow-hidden bg-white/10 p-0.5 flex items-center justify-center shadow-xs">
+          <img
+            src="/logo/logo.png"
+            alt="Attendly"
+            className="w-full h-full object-contain rounded-md"
+          />
         </div>
         <div>
           <div className="flex items-center gap-1.5">

@@ -1,16 +1,38 @@
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const zlib = require('zlib');
 
-// Create a basic valid PNG with RGBA buffer
+const logoPath = path.resolve(__dirname, '../public/logo/logo.png');
+const outDir = path.resolve(__dirname, '../public/icons');
+
+if (!fs.existsSync(outDir)) {
+  fs.mkdirSync(outDir, { recursive: true });
+}
+
+// If public/logo/logo.png exists, generate icons using sips on macOS
+if (fs.existsSync(logoPath)) {
+  console.log(`Found logo at ${logoPath}. Generating icons from logo...`);
+  try {
+    [16, 32, 48, 128].forEach(size => {
+      const target = path.join(outDir, `icon${size}.png`);
+      execSync(`sips -z ${size} ${size} "${logoPath}" --out "${target}"`, { stdio: 'inherit' });
+      console.log(`Generated icon${size}.png from logo.`);
+    });
+    process.exit(0);
+  } catch (err) {
+    console.warn("sips command failed, falling back to algorithmic PNG generator:", err);
+  }
+}
+
+// Fallback pure PNG generator
 function createPng(width, height, drawFn) {
-  // RGBA buffer: height rows, each row has 1 filter byte (0) + width * 4 bytes
   const rowBytes = 1 + width * 4;
   const rawData = Buffer.alloc(rowBytes * height);
 
   for (let y = 0; y < height; y++) {
     const rowOffset = y * rowBytes;
-    rawData[rowOffset] = 0; // Filter: None
+    rawData[rowOffset] = 0;
     for (let x = 0; x < width; x++) {
       const pixelOffset = rowOffset + 1 + x * 4;
       const [r, g, b, a] = drawFn(x, y, width, height);
@@ -22,19 +44,15 @@ function createPng(width, height, drawFn) {
   }
 
   const deflated = zlib.deflateSync(rawData);
-
-  // PNG Header
   const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-
-  // IHDR Chunk
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
-  ihdr.writeUInt8(8, 8); // bit depth
-  ihdr.writeUInt8(6, 9); // color type RGBA
-  ihdr.writeUInt8(0, 10); // compression
-  ihdr.writeUInt8(0, 11); // filter
-  ihdr.writeUInt8(0, 12); // interlace
+  ihdr.writeUInt8(8, 8);
+  ihdr.writeUInt8(6, 9);
+  ihdr.writeUInt8(0, 10);
+  ihdr.writeUInt8(0, 11);
+  ihdr.writeUInt8(0, 12);
 
   const ihdrChunk = createChunk('IHDR', ihdr);
   const idatChunk = createChunk('IDAT', deflated);
@@ -54,7 +72,6 @@ function createChunk(type, data) {
   return buf;
 }
 
-// CRC32 table
 const crcTable = new Int32Array(256);
 for (let n = 0; n < 256; n++) {
   let c = n;
@@ -72,18 +89,11 @@ function crc32(buf) {
   return crc ^ -1;
 }
 
-// Icon design: Deep Teal background (#173D37) with rounded corners, and a glowing Mint (#A9F0C3) presence check/circle
 function iconDrawer(x, y, w, h) {
   const cx = w / 2;
   const cy = h / 2;
-  const r = w / 2;
-
-  // Distance from center
   const dx = x - cx + 0.5;
   const dy = y - cy + 0.5;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-
-  // Rounded squircle / circle background
   const cornerRadius = w * 0.28;
   const inBoxX = Math.abs(dx) <= (cx - cornerRadius);
   const inBoxY = Math.abs(dy) <= (cy - cornerRadius);
@@ -97,45 +107,18 @@ function iconDrawer(x, y, w, h) {
     insideBg = (cornerDx * cornerDx + cornerDy * cornerDy) <= (cornerRadius * cornerRadius);
   }
 
-  if (!insideBg) {
-    return [0, 0, 0, 0]; // Transparent
-  }
+  if (!insideBg) return [0, 0, 0, 0];
 
-  // Deep Teal: [23, 61, 55, 255]
-  // Mint Green: [169, 240, 195, 255]
-
-  // Inner shape: Stylized 'A' + attendance presence dot
-  // Presence circle at top right:
   const dotCx = cx + w * 0.22;
   const dotCy = cy - h * 0.22;
-  const dotR = w * 0.14;
   const dotDist = Math.sqrt((x - dotCx) ** 2 + (y - dotCy) ** 2);
+  if (dotDist <= w * 0.14) return [169, 240, 195, 255];
 
-  if (dotDist <= dotR) {
-    return [169, 240, 195, 255]; // Mint accent dot
-  }
+  const dist1 = distToSegment(x / w, y / h, 0.28, 0.52, 0.45, 0.68);
+  const dist2 = distToSegment(x / w, y / h, 0.45, 0.68, 0.72, 0.36);
+  if (Math.min(dist1, dist2) < 0.08) return [169, 240, 195, 255];
 
-  // Stylized checkmark / attendee curve in center
-  // Checkmark points: (0.3w, 0.55h) -> (0.45w, 0.7h) -> (0.75w, 0.35h)
-  const normX = x / w;
-  const normY = y / h;
-
-  // Main checkmark thickness:
-  const dist1 = distToSegment(normX, normY, 0.28, 0.52, 0.45, 0.68);
-  const dist2 = distToSegment(normX, normY, 0.45, 0.68, 0.72, 0.36);
-  const minCheckDist = Math.min(dist1, dist2);
-
-  if (minCheckDist < 0.08) {
-    return [169, 240, 195, 255]; // Mint checkmark
-  }
-
-  // Subtle gradient in Teal
-  const factor = 1 - (dist / (r * 1.4));
-  const tr = Math.round(23 * factor + 10);
-  const tg = Math.round(61 * factor + 15);
-  const tb = Math.round(55 * factor + 15);
-
-  return [tr, tg, tb, 255];
+  return [23, 61, 55, 255];
 }
 
 function distToSegment(px, py, x1, y1, x2, y2) {
@@ -144,11 +127,6 @@ function distToSegment(px, py, x1, y1, x2, y2) {
   let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
   t = Math.max(0, Math.min(1, t));
   return Math.sqrt((px - (x1 + t * (x2 - x1))) ** 2 + (py - (y1 + t * (y2 - y1))) ** 2);
-}
-
-const outDir = path.resolve(__dirname, '../public/icons');
-if (!fs.existsSync(outDir)) {
-  fs.mkdirSync(outDir, { recursive: true });
 }
 
 [16, 32, 48, 128].forEach(size => {

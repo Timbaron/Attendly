@@ -166,20 +166,12 @@ export const DashboardApp: React.FC = () => {
       <header className="sticky top-0 z-40 bg-attendly-teal text-white border-b border-attendly-teal-600 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-attendly-mint flex items-center justify-center shadow-inner">
-              <svg
-                className="w-5 h-5 text-attendly-teal"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <polyline points="16 11 18 13 22 9" />
-              </svg>
+            <div className="w-9 h-9 rounded-xl overflow-hidden bg-white/10 p-0.5 flex items-center justify-center shadow-xs">
+              <img
+                src="/logo/logo.png"
+                alt="Attendly"
+                className="w-full h-full object-contain rounded-lg"
+              />
             </div>
             <div>
               <div className="flex items-center gap-2">
