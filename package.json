@@ -6,11 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && vite build --config vite.content.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "package:test": "tsc --noEmit && vite build && node scripts/package-test.cjs"
+    "package:test": "npm run build && node scripts/package-test.cjs"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

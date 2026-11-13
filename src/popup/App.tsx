@@ -23,6 +23,9 @@ export const App: React.FC = () => {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [isDark, setIsDark] = useState(false);
 
+  const activeTabIdRef = React.useRef<number | null>(null);
+  const detectedCodeRef = React.useRef<string | null>(null);
+
   // 1. Initial setup and tab discovery
   useEffect(() => {
     // Check onboarding status
@@ -82,11 +85,13 @@ export const App: React.FC = () => {
     const handleFoundTab = (tab: chrome.tabs.Tab) => {
       if (!tab.id) return;
       setActiveTabId(tab.id);
+      activeTabIdRef.current = tab.id;
 
       // Extract meeting code directly from tab URL
       const codeMatch = tab.url?.match(/\b([a-z]{3}-[a-z]{4}-[a-z]{3})\b/i);
       const code = codeMatch ? codeMatch[1].toLowerCase() : null;
       setDetectedMeetingCode(code);
+      detectedCodeRef.current = code;
 
       fetchMeetingState(tab.id, code);
     };
@@ -102,10 +107,15 @@ export const App: React.FC = () => {
     };
     chrome.runtime.onMessage.addListener(messageListener);
 
-    // Refresh ticker for elapsed time
+    // Refresh ticker for elapsed time & auto-reconnect
     const ticker = setInterval(() => {
-      setData((prev) => (prev ? { ...prev } : null));
-    }, 1000);
+      setData((prev) => {
+        if (!prev && activeTabIdRef.current) {
+          fetchMeetingState(activeTabIdRef.current, detectedCodeRef.current);
+        }
+        return prev ? { ...prev } : null;
+      });
+    }, 1200);
 
     return () => {
       chrome.runtime.onMessage.removeListener(messageListener);

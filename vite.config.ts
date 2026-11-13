@@ -32,14 +32,10 @@ export default defineConfig({
         popup: resolve(__dirname, "popup.html"),
         dashboard: resolve(__dirname, "dashboard.html"),
         "service-worker": resolve(__dirname, "src/background/service-worker.ts"),
-        "content-script": resolve(__dirname, "src/content/content-script.ts"),
       },
       output: {
         entryFileNames: (chunkInfo) => {
-          if (
-            chunkInfo.name === "service-worker" ||
-            chunkInfo.name === "content-script"
-          ) {
+          if (chunkInfo.name === "service-worker") {
             return "[name].js";
           }
           return "assets/[name]-[hash].js";

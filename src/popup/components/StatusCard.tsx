@@ -19,7 +19,7 @@ export const StatusCard: React.FC<StatusCardProps> = ({
   onReloadTab,
 }) => {
   if (!data) {
-    if (needsReload || detectedMeetingCode) {
+    if (needsReload) {
       return (
         <div className="p-4 bg-white dark:bg-attendly-card-dark rounded-xl border border-attendly-teal/20 dark:border-attendly-mint/20 shadow-sm mx-4 mt-3 text-center space-y-2">
           <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
@@ -38,6 +38,20 @@ export const StatusCard: React.FC<StatusCardProps> = ({
               Reload Tab & Connect
             </button>
           )}
+        </div>
+      );
+    }
+
+    if (detectedMeetingCode) {
+      return (
+        <div className="p-4 bg-white dark:bg-attendly-card-dark rounded-xl border border-gray-100 dark:border-gray-800 shadow-sm mx-4 mt-3 text-center space-y-1.5">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+            Connecting to {detectedMeetingCode}...
+          </div>
+          <p className="text-xs text-attendly-text-muted dark:text-attendly-text-darkMuted">
+            Synchronizing with Google Meet session...
+          </p>
         </div>
       );
     }
