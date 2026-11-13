@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Attendly — Google Meet Attendance Tracker",
+  "short_name": "Attendly",
+  "version": "0.1.0",
+  "version_name": "0.1.0-beta",
+  "description": "Every Presence Counts. Privacy-first, local-only attendance tracking and downloadable reports for Google Meet.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://meet.google.com/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "Attendly — Attendance Tracker"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
