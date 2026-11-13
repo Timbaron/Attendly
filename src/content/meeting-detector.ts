@@ -54,25 +54,25 @@ export class MeetingDetector {
       return { stage: "homepage", meetingCode: null, meetingTitle: null };
     }
 
-    // Check if user has left the call
+    // 1. Check if user has left the call
     const leftCallIndicators = [
       "div[data-call-ended='true']",
       "button[jsname='A9uide']", // "Rejoin" button
       "a[href='/']", // "Return to home screen" link
     ];
     for (const sel of leftCallIndicators) {
-      const el = document.querySelector(sel);
-      if (el && el.textContent?.toLowerCase().includes("rejoin")) {
+      const d = document.querySelector(sel);
+      if (d && d.textContent?.toLowerCase().includes("rejoin")) {
         return {
           stage: "left_call",
           meetingCode,
-          meetingTitle: this.getMeetingTitle(),
+          meetingTitle: this.getMeetingTitle() || meetingCode,
         };
       }
     }
 
-    // Check if actively in-call:
-    // Look for leave call button or bottom controls container
+    // 2. Check if actively in-call FIRST before lobby!
+    // The leave call button and call controls only exist when inside an active meeting.
     const inCallIndicators = [
       "button[data-is-leave-call='true']",
       "button[aria-label*='leave call' i]",
@@ -80,6 +80,9 @@ export class MeetingDetector {
       "button[jsname='CQylAd']", // Leave button jsname
       "div[data-call-controls='true']",
       "div[aria-label*='meeting controls' i]",
+      "button[aria-label*='show everyone' i]",
+      "button[aria-label*='people' i]",
+      "button[data-panel-id='1']",
     ];
 
     for (const sel of inCallIndicators) {
@@ -87,32 +90,41 @@ export class MeetingDetector {
         return {
           stage: "in_call",
           meetingCode,
-          meetingTitle: this.getMeetingTitle(),
+          meetingTitle: this.getMeetingTitle() || meetingCode,
         };
       }
     }
 
-    // Check if in lobby / green room / pre-join
+    // 3. Check if user is in lobby / green room / pre-join
     const lobbyIndicators = [
       "button[jsname='Qx7uuf']", // "Join now" or "Ask to join"
-      "div[data-is-muted]",
-      "span[jsname='V67aGc']",
+      "button[aria-label*='ask to join' i]",
+      "button[aria-label*='join now' i]",
     ];
     for (const sel of lobbyIndicators) {
       if (document.querySelector(sel)) {
         return {
           stage: "lobby",
           meetingCode,
-          meetingTitle: this.getMeetingTitle(),
+          meetingTitle: "Ready to join?",
         };
       }
     }
 
-    // Fallback: if we have a meeting code and not explicitly in-call, treat as lobby
+    // Check headings/body text for pre-join screen
+    const bodyText = document.body ? document.body.innerText : "";
+    if (bodyText.includes("Ready to join?") || bodyText.includes("Ask to join")) {
+      return {
+        stage: "lobby",
+        meetingCode,
+        meetingTitle: "Ready to join?",
+      };
+    }
+
     return {
-      stage: "lobby",
+      stage: "in_call",
       meetingCode,
-      meetingTitle: this.getMeetingTitle(),
+      meetingTitle: this.getMeetingTitle() || meetingCode,
     };
   }
 }

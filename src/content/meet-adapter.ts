@@ -9,10 +9,97 @@ export interface MeetObservationSnapshot {
 
 export class MeetAdapter {
   /**
+   * Validates whether a text string represents an actual participant name
+   * rather than a Google Meet UI control, button, or Material Symbol ligature.
+   */
+  public static isValidParticipantName(name: string | null | undefined, el?: Element): boolean {
+    if (!name || typeof name !== "string") return false;
+    const clean = name.trim();
+    if (clean.length < 2 || clean.length > 70) return false;
+
+    // Check if element is inside a button, control, or icon
+    if (el) {
+      if (
+        el.closest(
+          "button, [role='button'], [role='menuitem'], [role='tab'], [role='tooltip'], [aria-haspopup], [aria-hidden='true']"
+        )
+      ) {
+        return false;
+      }
+      if (
+        el.closest(
+          ".google-material-icons, .material-icons, .google-symbols, .material-symbols-outlined, i, svg, [class*='icon' i], [class*='symbol' i]"
+        )
+      ) {
+        return false;
+      }
+    }
+
+    const lower = clean.toLowerCase();
+
+    // Reject Material symbol ligatures that contain underscores (e.g. frame_person, visual_effects, etc.)
+    if (lower.includes("_")) {
+      return false;
+    }
+
+    // Reject timestamps/durations (e.g. "12:34", "0:00")
+    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(clean)) {
+      return false;
+    }
+
+    // Common UI buttons and controls in Google Meet
+    const bannedKeywords = [
+      "reframe",
+      "frame_person",
+      "visual_effects",
+      "background",
+      "effects",
+      "more options",
+      "turn on captions",
+      "turn off",
+      "mute",
+      "unmute",
+      "camera",
+      "microphone",
+      "share screen",
+      "present now",
+      "raise hand",
+      "send a message",
+      "host controls",
+      "meeting details",
+      "ready to join",
+      "ask to join",
+      "join now",
+      "switch camera",
+      "settings",
+      "people",
+      "chat",
+      "activities",
+      "in call",
+      "pin to screen",
+      "unpin",
+      "blur",
+      "check audio",
+      "more_vert",
+      "mic_off",
+      "videocam_off",
+      "call_end",
+      "volume_off",
+    ];
+
+    for (const kw of bannedKeywords) {
+      if (lower === kw || lower.startsWith(kw + " ") || lower.endsWith(" " + kw)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
    * Checks whether the People / Participants panel is open.
    */
   public static isPeoplePanelOpen(): boolean {
-    // 1. Check if the People tab toggle button is active/pressed
     const peopleBtn =
       document.querySelector("button[aria-label*='people' i][aria-pressed='true']") ||
       document.querySelector("button[aria-label*='show everyone' i][aria-pressed='true']") ||
@@ -21,7 +108,6 @@ export class MeetAdapter {
 
     if (peopleBtn) return true;
 
-    // 2. Check if the People side panel container exists and is visible
     const panel =
       document.querySelector("div[role='tabpanel'][aria-label*='people' i]") ||
       document.querySelector("div[role='tabpanel'][aria-label*='participant' i]") ||
@@ -31,7 +117,6 @@ export class MeetAdapter {
       return true;
     }
 
-    // 3. Fallback: check for list of participants in sidebar
     const participantList = document.querySelector("div[aria-label*='participants' i]");
     if (participantList && participantList.getBoundingClientRect().width > 0) {
       return true;
@@ -41,26 +126,73 @@ export class MeetAdapter {
   }
 
   /**
+   * Extracts the current user's display name from self tile or user profile.
+   */
+  public static getSelfName(): string {
+    const candidates = [
+      document.querySelector("[data-self-name]")?.getAttribute("data-self-name"),
+      document.querySelector("div[data-user-name]")?.getAttribute("data-user-name"),
+      document.querySelector("[data-requested-participant-id*='self']")?.getAttribute("data-name"),
+    ];
+
+    for (const name of candidates) {
+      if (name && this.isValidParticipantName(name)) {
+        return name.replace(/\s*\((you|host)\)\s*/gi, "").trim();
+      }
+    }
+
+    return "You";
+  }
+
+  /**
    * Extracts the total participant count from Meet UI badges or tabs.
    */
   public static extractHeaderCount(): number | null {
-    // Look at People button aria-label or text: e.g. "Show everyone (18)"
     const candidates = [
       document.querySelector("button[aria-label*='show everyone' i]"),
       document.querySelector("button[aria-label*='people' i]"),
       document.querySelector("button[data-panel-id='1']"),
       document.querySelector("div[aria-label*='people' i]"),
       document.querySelector("div[role='tab'][aria-label*='people' i]"),
+      document.querySelector("[data-participant-count]"),
     ];
 
     for (const el of candidates) {
       if (!el) continue;
-      const text = `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`;
-      const match = text.match(/\((\d+)\)/) || text.match(/\b(\d+)\s*(people|participants)?\b/i);
-      if (match && match[1]) {
-        const count = parseInt(match[1], 10);
-        if (!isNaN(count) && count > 0) {
-          return count;
+
+      // 1. Check data-participant-count attribute
+      const attrCount = el.getAttribute("data-participant-count");
+      if (attrCount) {
+        const c = parseInt(attrCount, 10);
+        if (!isNaN(c) && c > 0) return c;
+      }
+
+      // 2. Check aria-label and text
+      const aria = el.getAttribute("aria-label") || "";
+      const text = el.textContent || "";
+      const combined = `${aria} ${text}`;
+
+      // Match "(1)" or "People (1)" or "(12)"
+      const parenMatch = combined.match(/\((\d+)\)/);
+      if (parenMatch) {
+        const c = parseInt(parenMatch[1], 10);
+        if (!isNaN(c) && c > 0) return c;
+      }
+
+      // Match "1 person", "2 people", "5 participants"
+      const wordMatch = combined.match(/\b(\d+)\s*(people|participants|person)\b/i);
+      if (wordMatch) {
+        const c = parseInt(wordMatch[1], 10);
+        if (!isNaN(c) && c > 0) return c;
+      }
+
+      // 3. Check child badge elements (often an isolated number inside span/div)
+      const badges = Array.from(el.querySelectorAll("span, div"));
+      for (const badge of badges) {
+        const badgeText = badge.textContent?.trim();
+        if (badgeText && /^\d+$/.test(badgeText)) {
+          const c = parseInt(badgeText, 10);
+          if (!isNaN(c) && c > 0) return c;
         }
       }
     }
@@ -75,7 +207,6 @@ export class MeetAdapter {
     const participants: ObservedParticipantRaw[] = [];
     const seenNames = new Set<string>();
 
-    // Strategy A: Find participant list items by ARIA role
     const items = Array.from(
       document.querySelectorAll(
         "div[role='listitem'], div[role='list'] > div, div[data-participant-id]"
@@ -90,7 +221,6 @@ export class MeetAdapter {
       }
     }
 
-    // Strategy B: If Strategy A yields few results, inspect structured containers inside the panel
     if (participants.length === 0) {
       const nameContainers = Array.from(
         document.querySelectorAll(
@@ -100,7 +230,7 @@ export class MeetAdapter {
 
       for (const span of nameContainers) {
         const name = span.textContent?.trim();
-        if (name && name.length > 1 && !this.isIgnoredLabel(name) && !seenNames.has(name.toLowerCase())) {
+        if (name && this.isValidParticipantName(name, span) && !seenNames.has(name.toLowerCase())) {
           seenNames.add(name.toLowerCase());
           participants.push({
             displayName: name,
@@ -114,30 +244,40 @@ export class MeetAdapter {
   }
 
   /**
-   * Reads participants visible on the main video grid / tiles when panel is closed.
+   * Reads participants visible on the main video grid when the People panel is closed.
    */
   public static readGridParticipants(): ObservedParticipantRaw[] {
     const participants: ObservedParticipantRaw[] = [];
     const seenNames = new Set<string>();
 
-    const tileNameElements = Array.from(
-      document.querySelectorAll(
-        "div[data-self-name], div[data-requested-participant-id] span, div[data-participant-id] span"
-      )
-    );
+    // 1. Current user's self tile name (e.g. data-self-name="Timothy Akiode")
+    const selfName = this.getSelfName();
+    if (selfName && this.isValidParticipantName(selfName)) {
+      seenNames.add(selfName.toLowerCase());
+      participants.push({
+        displayName: selfName,
+        isHost: false,
+      });
+    }
 
-    for (const el of tileNameElements) {
-      const name =
-        el.getAttribute("data-self-name") ||
-        el.getAttribute("title") ||
-        el.textContent?.trim();
+    // 2. Specific participant name badge elements on other video tiles
+    const targetSelectors = [
+      "div[data-requested-participant-id] span.zWGUib",
+      "div[data-participant-id] span.zWGUib",
+      "div[data-requested-participant-id] div.NWp9Yd",
+      "div[data-participant-id] div.NWp9Yd",
+      "div[data-requested-participant-id] div.jT5rCe",
+      "div[data-participant-id] div.jT5rCe",
+      "div[data-requested-participant-id] div[data-name]",
+      "div[data-participant-id] div[data-name]",
+      "div[data-participant-id] span.dwLVNd",
+    ];
 
-      if (
-        name &&
-        name.length > 1 &&
-        !this.isIgnoredLabel(name) &&
-        !seenNames.has(name.toLowerCase())
-      ) {
+    const elements = Array.from(document.querySelectorAll(targetSelectors.join(", ")));
+
+    for (const el of elements) {
+      const name = el.getAttribute("data-name") || el.getAttribute("title") || el.textContent?.trim();
+      if (name && this.isValidParticipantName(name, el) && !seenNames.has(name.toLowerCase())) {
         seenNames.add(name.toLowerCase());
         participants.push({
           displayName: name,
@@ -164,8 +304,15 @@ export class MeetAdapter {
       participants = this.readGridParticipants();
     }
 
-    // Virtualization detection:
-    // If header count indicates 25 people, but we only have 8 in DOM, virtualization is occurring
+    // Correlation with official Meet header count badge:
+    if (headerCount === 1) {
+      // Exactly 1 person in the meeting: it's the current user!
+      const selfName = this.getSelfName();
+      participants = [{ displayName: selfName, isHost: false }];
+    } else if (headerCount !== null && headerCount > 0 && participants.length > headerCount) {
+      participants = participants.slice(0, headerCount);
+    }
+
     const virtualizationDetected =
       isPeoplePanelOpen &&
       headerCount !== null &&
@@ -181,7 +328,6 @@ export class MeetAdapter {
   }
 
   private static parseParticipantItem(element: Element): ObservedParticipantRaw | null {
-    // Check if this element contains a participant
     const nameEl =
       element.querySelector("span[title]") ||
       element.querySelector("span.zWGUib") ||
@@ -189,15 +335,13 @@ export class MeetAdapter {
       element.querySelector("div[title]");
 
     const rawName = nameEl?.getAttribute("title") || nameEl?.textContent?.trim();
-    if (!rawName || rawName.length < 2 || this.isIgnoredLabel(rawName)) {
+    if (!rawName || !this.isValidParticipantName(rawName, element)) {
       return null;
     }
 
-    // Check for avatar
     const imgEl = element.querySelector("img[src*='googleusercontent.com']");
     const avatarUrl = imgEl ? (imgEl.getAttribute("src") || undefined) : undefined;
 
-    // Check for host indicator
     const isHost =
       Boolean(element.querySelector("[aria-label*='host' i]")) ||
       element.textContent?.toLowerCase().includes("meeting host") === true;
@@ -210,24 +354,5 @@ export class MeetAdapter {
       avatarUrl,
       isHost,
     };
-  }
-
-  private static isIgnoredLabel(text: string): boolean {
-    const lower = text.toLowerCase();
-    const ignored = [
-      "people",
-      "chat",
-      "activities",
-      "host controls",
-      "in call",
-      "contributors",
-      "search for people",
-      "add people",
-      "mute all",
-      "meeting details",
-      "turn on captions",
-      "present now",
-    ];
-    return ignored.includes(lower);
   }
 }
