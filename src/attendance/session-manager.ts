@@ -6,13 +6,18 @@ import {
   ParticipantAttendance,
 } from "../types/attendance";
 import { getCurrentIso } from "../utils/time";
-import { resolveParticipantIdentity } from "./participant-identity";
+import {
+  CANONICAL_LOCAL_USER_ID,
+  consolidateAttendanceSessions,
+  resolveParticipantIdentity,
+} from "./participant-identity";
 import {
   calculateTotalParticipantDuration,
   evaluateEarlyDeparture,
   evaluateLateArrival,
   calculateAttendancePercentage,
 } from "./attendance-calculator";
+import { AttendlyLogger } from "../utils/logger";
 
 export interface ReconcileOptions {
   observedList: ObservedParticipantRaw[];
@@ -26,7 +31,7 @@ export class SessionManager {
   // Map of participant ID -> consecutive missed observation counts
   private missedCounts: Map<string, number> = new Map();
 
-  // Threshold of missed cycles before marking a participant departed (default 3 cycles = ~6 seconds)
+  // Threshold of missed cycles before confirming departure (default 3 cycles = ~6 seconds)
   private readonly MISSED_CYCLES_THRESHOLD = 3;
 
   /**
@@ -49,37 +54,58 @@ export class SessionManager {
       ...data.participants,
     };
 
-    // Pre-pass: Unify any duplicate "You" records with the self participant
-    const youEntry = Object.values(participants).find(
-      (p) => p.displayName.trim().toLowerCase() === "you"
-    );
-    const selfEntry = Object.values(participants).find(
+    const canonicalLocalId = data.localUserCanonicalId || CANONICAL_LOCAL_USER_ID;
+
+    // =========================================================================
+    // PRE-PASS: Consolidate any duplicate local user records
+    // =========================================================================
+    const localUserRecords = Object.values(participants).filter(
       (p) =>
-        p.isSelf ||
-        (youEntry &&
-          p.id !== youEntry.id &&
-          options.observedList.some(
-            (r) => r.isSelf && r.displayName.toLowerCase() === p.displayName.toLowerCase()
-          ))
+        p.isLocalUser ||
+        p.id === canonicalLocalId ||
+        p.displayName.trim().toLowerCase() === "you"
     );
 
-    if (youEntry && selfEntry && youEntry.id !== selfEntry.id) {
-      selfEntry.firstJoinedAt =
-        new Date(youEntry.firstJoinedAt) < new Date(selfEntry.firstJoinedAt)
-          ? youEntry.firstJoinedAt
-          : selfEntry.firstJoinedAt;
+    if (localUserRecords.length > 1) {
+      // Prefer record with real name, or canonical ID
+      const primary =
+        localUserRecords.find((p) => p.displayName.trim().toLowerCase() !== "you") ||
+        localUserRecords.find((p) => p.id === canonicalLocalId) ||
+        localUserRecords[0];
 
-      selfEntry.sessions = [...youEntry.sessions, ...selfEntry.sessions].sort(
-        (a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime()
-      );
-      selfEntry.isSelf = true;
-      delete participants[youEntry.id];
-      this.missedCounts.delete(youEntry.id);
+      for (const other of localUserRecords) {
+        if (other.id === primary.id) continue;
+
+        primary.firstJoinedAt =
+          new Date(other.firstJoinedAt) < new Date(primary.firstJoinedAt)
+            ? other.firstJoinedAt
+            : primary.firstJoinedAt;
+
+        if (other.presentAtTrackingStart) {
+          primary.presentAtTrackingStart = true;
+        }
+
+        primary.sessions = consolidateAttendanceSessions(
+          [...primary.sessions, ...other.sessions],
+          nowIso
+        );
+
+        delete participants[other.id];
+        this.missedCounts.delete(other.id);
+      }
+      primary.isLocalUser = true;
     }
 
     const seenIdsInThisCycle = new Set<string>();
 
+    // Determine if this cycle is right around tracking start
+    const isAtTrackingStart =
+      data.trackingStartedAt &&
+      Math.abs(new Date(nowIso).getTime() - new Date(data.trackingStartedAt).getTime()) < 10000;
+
+    // =========================================================================
     // 1. Process all currently observed participants
+    // =========================================================================
     for (const raw of options.observedList) {
       if (data.config.excludeHost && raw.isHost) {
         continue;
@@ -90,7 +116,8 @@ export class SessionManager {
         displayName,
         identityConfidence,
         collisionWarning,
-      } = resolveParticipantIdentity(raw, participants);
+        isLocalUser,
+      } = resolveParticipantIdentity(raw, participants, canonicalLocalId);
 
       seenIdsInThisCycle.add(id);
       this.missedCounts.set(id, 0);
@@ -109,7 +136,7 @@ export class SessionManager {
       const existingRecord = participants[id];
 
       if (!existingRecord) {
-        // Brand new participant joined
+        // Brand new participant
         const isLate = evaluateLateArrival(
           nowIso,
           data.trackingStartedAt,
@@ -129,7 +156,10 @@ export class SessionManager {
           displayName,
           avatarUrl: raw.avatarUrl,
           firstJoinedAt: nowIso,
+          firstObservedAt: nowIso,
+          lastObservedAt: nowIso,
           lastLeftAt: null,
+          confirmedLeftAt: null,
           totalDurationMs: 0,
           sessions: [newSession],
           status: "present",
@@ -137,12 +167,17 @@ export class SessionManager {
           leftEarly: false,
           attendancePercentage: null,
           identityConfidence,
-          isSelf: raw.isSelf,
+          isLocalUser,
+          isSelf: isLocalUser,
+          presentAtTrackingStart: Boolean(isAtTrackingStart),
         };
 
         participants[id] = newRecord;
+        AttendlyLogger.logStateTransition(id, displayName, "NONE", "PRESENT", "New participant joined");
       } else {
         // Existing participant
+        existingRecord.lastObservedAt = nowIso;
+
         if (existingRecord.status !== "present") {
           // Reconnection! Reopened attendance session
           const newSession: AttendanceSession = {
@@ -153,9 +188,22 @@ export class SessionManager {
             confidence: options.peoplePanelOpen ? "observed" : "estimated",
           };
 
+          const prevStatus = existingRecord.status;
           existingRecord.status = "present";
           existingRecord.lastLeftAt = null;
-          existingRecord.sessions = [...existingRecord.sessions, newSession];
+          existingRecord.confirmedLeftAt = null;
+          existingRecord.sessions = consolidateAttendanceSessions(
+            [...existingRecord.sessions, newSession],
+            nowIso
+          );
+
+          AttendlyLogger.logStateTransition(
+            id,
+            existingRecord.displayName,
+            prevStatus,
+            "PRESENT",
+            "Reconnection"
+          );
         }
 
         // If previously named "You", upgrade to real display name
@@ -166,7 +214,8 @@ export class SessionManager {
           existingRecord.displayName = displayName;
         }
 
-        if (raw.isSelf) {
+        if (isLocalUser) {
+          existingRecord.isLocalUser = true;
           existingRecord.isSelf = true;
         }
 
@@ -177,7 +226,13 @@ export class SessionManager {
       }
     }
 
+    // =========================================================================
     // 2. Process participants not seen in this cycle
+    // =========================================================================
+    const currentlyPresentCount = Object.values(participants).filter(
+      (p) => p.status === "present"
+    ).length;
+
     const allParticipantIds = Object.keys(participants);
     for (const id of allParticipantIds) {
       if (seenIdsInThisCycle.has(id)) continue;
@@ -188,22 +243,33 @@ export class SessionManager {
       const currentMissed = (this.missedCounts.get(id) || 0) + 1;
       this.missedCounts.set(id, currentMissed);
 
-      // Confirm departure when missed for threshold cycles
-      if (currentMissed >= this.MISSED_CYCLES_THRESHOLD) {
+      // Evaluate departure:
+      // Case A: People panel is open (full roster visible) and participant missing for threshold cycles
+      // Case B: People panel is closed BUT official headerCount indicates a drop below current present count
+      const isConfirmedDeparture =
+        (options.peoplePanelOpen && !options.virtualizationDetected && currentMissed >= this.MISSED_CYCLES_THRESHOLD) ||
+        (!options.peoplePanelOpen &&
+          options.headerCount !== null &&
+          options.headerCount < currentlyPresentCount &&
+          currentMissed >= this.MISSED_CYCLES_THRESHOLD);
+
+      if (isConfirmedDeparture) {
+        const prevStatus = p.status;
         p.status = "left";
         p.lastLeftAt = nowIso;
+        p.confirmedLeftAt = nowIso;
 
-        // CRITICAL: Close active session so duration stops accumulating!
+        // Close active session
         const activeSession = p.sessions[p.sessions.length - 1];
         if (activeSession && activeSession.leftAt === null) {
           activeSession.leftAt = nowIso;
+          activeSession.confidence = "observed";
           activeSession.durationMs = Math.max(
             0,
             new Date(nowIso).getTime() - new Date(activeSession.joinedAt).getTime()
           );
         }
 
-        // Evaluate early departure
         p.leftEarly = evaluateEarlyDeparture(
           p.lastLeftAt,
           p.status,
@@ -211,10 +277,44 @@ export class SessionManager {
           data.config.expectedDurationMinutes,
           data.config.earlyDepartureThresholdMinutes
         );
+
+        AttendlyLogger.logStateTransition(
+          p.id,
+          p.displayName,
+          prevStatus,
+          "LEFT",
+          options.peoplePanelOpen ? "People panel verified absence" : "Header count drop confirmed departure"
+        );
+      } else if (!options.peoplePanelOpen && currentMissed >= this.MISSED_CYCLES_THRESHOLD * 2) {
+        // Missing from video grid while People panel is closed and header count did NOT drop.
+        // DO NOT fabricate departure! Mark status as "unknown" and close active session with "estimated"
+        const prevStatus = p.status;
+        p.status = "unknown";
+        p.lastLeftAt = nowIso;
+
+        const activeSession = p.sessions[p.sessions.length - 1];
+        if (activeSession && activeSession.leftAt === null) {
+          activeSession.leftAt = nowIso;
+          activeSession.confidence = "estimated";
+          activeSession.durationMs = Math.max(
+            0,
+            new Date(nowIso).getTime() - new Date(activeSession.joinedAt).getTime()
+          );
+        }
+
+        AttendlyLogger.logStateTransition(
+          p.id,
+          p.displayName,
+          prevStatus,
+          "UNKNOWN",
+          "Off-screen grid tile while People panel closed"
+        );
       }
     }
 
+    // =========================================================================
     // 3. Recompute durations and attendance percentages
+    // =========================================================================
     const referenceDurationMs = this.calculateReferenceDuration(data, nowIso);
 
     for (const id of Object.keys(participants)) {
@@ -226,7 +326,9 @@ export class SessionManager {
       );
     }
 
+    // =========================================================================
     // 4. Check for virtualization diagnostic
+    // =========================================================================
     if (options.virtualizationDetected && !data.virtualizationDetected) {
       newDiagnostics.push({
         id: `diag_virt_${Date.now()}`,
@@ -249,6 +351,7 @@ export class SessionManager {
         lastObservedCount: options.observedList.length,
         virtualizationDetected: options.virtualizationDetected,
         peoplePanelOpen: options.peoplePanelOpen,
+        localUserCanonicalId: canonicalLocalId,
         diagnostics: [...data.diagnostics, ...newDiagnostics],
       },
       newDiagnostics,
@@ -289,7 +392,8 @@ export class SessionManager {
         ...p,
         status: reason === "stopped" ? "left" : p.status,
         lastLeftAt: reason === "stopped" ? nowIso : p.lastLeftAt,
-        sessions: updatedSessions,
+        confirmedLeftAt: reason === "stopped" ? nowIso : p.confirmedLeftAt,
+        sessions: consolidateAttendanceSessions(updatedSessions, nowIso),
         totalDurationMs,
         attendancePercentage: calculateAttendancePercentage(
           totalDurationMs,
@@ -325,7 +429,7 @@ export class SessionManager {
 
         participants[id] = {
           ...p,
-          sessions: [...p.sessions, newSession],
+          sessions: consolidateAttendanceSessions([...p.sessions, newSession], resumedAtIso),
         };
       } else {
         participants[id] = p;

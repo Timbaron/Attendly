@@ -85,6 +85,7 @@ export async function generateExcelWorkbook(data: MeetingAttendanceData): Promis
     { header: "Participant", key: "name", width: 28 },
     { header: "Status", key: "status", width: 14 },
     { header: "First Join", key: "firstJoin", width: 16 },
+    { header: "Present at Start", key: "presentAtStart", width: 16 },
     { header: "Last Leave", key: "lastLeave", width: 16 },
     { header: "Total Duration", key: "totalDuration", width: 16 },
     { header: "Rejoins", key: "rejoins", width: 12 },
@@ -100,17 +101,19 @@ export async function generateExcelWorkbook(data: MeetingAttendanceData): Promis
   });
 
   Object.values(data.participants).forEach((p) => {
+    const isEstimated = p.sessions.some((s) => s.confidence === "estimated");
     attendanceSheet.addRow({
       name: sanitizeSpreadsheetField(p.displayName),
       status: p.status.toUpperCase(),
       firstJoin: formatTime(p.firstJoinedAt, data.config.timeFormat),
+      presentAtStart: p.presentAtTrackingStart ? "Yes" : "No",
       lastLeave: p.lastLeftAt ? formatTime(p.lastLeftAt, data.config.timeFormat) : "—",
       totalDuration: formatDuration(p.totalDurationMs),
       rejoins: Math.max(0, p.sessions.length - 1),
       attendancePct: p.attendancePercentage !== null ? `${p.attendancePercentage}%` : "N/A",
       isLate: p.isLate ? "Yes" : "No",
       leftEarly: p.leftEarly ? "Yes" : "No",
-      confidence: p.identityConfidence.toUpperCase(),
+      confidence: isEstimated ? "ESTIMATED" : p.identityConfidence.toUpperCase(),
     });
   });
 

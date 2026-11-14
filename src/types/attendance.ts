@@ -35,6 +35,11 @@ export interface ParticipantAttendance {
   identityConfidence: IdentityConfidence;
   notes?: string;
   isSelf?: boolean;
+  isLocalUser?: boolean;
+  presentAtTrackingStart?: boolean;
+  firstObservedAt?: string;
+  lastObservedAt?: string;
+  confirmedLeftAt?: string | null;
 }
 
 export interface DiagnosticRecord {
@@ -78,6 +83,7 @@ export interface MeetingAttendanceData {
   lastObservedCount: number | null;
   virtualizationDetected: boolean;
   peoplePanelOpen: boolean;
+  localUserCanonicalId?: string;
 }
 
 export interface ObservedParticipantRaw {
@@ -86,6 +92,7 @@ export interface ObservedParticipantRaw {
   avatarUrl?: string;
   isHost?: boolean;
   isSelf?: boolean;
+  isLocalUser?: boolean;
 }
 
 export interface ParticipantSummaryStats {

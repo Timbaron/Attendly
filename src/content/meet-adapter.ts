@@ -254,7 +254,9 @@ export class MeetAdapter {
         const isSelf = /\((you)\)/i.test(parsed.displayName);
         const cleanName = parsed.displayName.replace(/\s*\((you|host)\)\s*/gi, "").trim();
         parsed.displayName = cleanName;
-        parsed.isSelf = isSelf || (selfName !== "You" && cleanName.toLowerCase() === selfName.toLowerCase());
+        const isLocal = isSelf || (selfName !== "You" && cleanName.toLowerCase() === selfName.toLowerCase());
+        parsed.isSelf = isLocal;
+        parsed.isLocalUser = isLocal;
 
         if (!seenNames.has(cleanName.toLowerCase())) {
           seenNames.add(cleanName.toLowerCase());
@@ -275,12 +277,14 @@ export class MeetAdapter {
         if (rawName && this.isValidParticipantName(rawName, span)) {
           const isSelf = /\((you)\)/i.test(rawName);
           const cleanName = rawName.replace(/\s*\((you|host)\)\s*/gi, "").trim();
+          const isLocal = isSelf || (selfName !== "You" && cleanName.toLowerCase() === selfName.toLowerCase());
           if (cleanName && !seenNames.has(cleanName.toLowerCase())) {
             seenNames.add(cleanName.toLowerCase());
             participants.push({
               displayName: cleanName,
               isHost: false,
-              isSelf: isSelf || (selfName !== "You" && cleanName.toLowerCase() === selfName.toLowerCase()),
+              isSelf: isLocal,
+              isLocalUser: isLocal,
             });
           }
         }
@@ -319,6 +323,7 @@ export class MeetAdapter {
 
       const isSelf = /\((you)\)/i.test(rawText);
       const cleanName = rawText.replace(/\s*\((you|host)\)\s*/gi, "").trim();
+      const isLocal = isSelf || (selfName !== "You" && cleanName.toLowerCase() === selfName.toLowerCase());
 
       if (cleanName && this.isValidParticipantName(cleanName, el) && !seenNames.has(cleanName.toLowerCase())) {
         seenNames.add(cleanName.toLowerCase());
@@ -331,7 +336,8 @@ export class MeetAdapter {
           displayName: cleanName,
           avatarUrl,
           isHost: false,
-          isSelf: isSelf || (selfName !== "You" && cleanName.toLowerCase() === selfName.toLowerCase()),
+          isSelf: isLocal,
+          isLocalUser: isLocal,
         });
       }
     }
@@ -345,6 +351,7 @@ export class MeetAdapter {
           displayName: selfName,
           isHost: false,
           isSelf: true,
+          isLocalUser: true,
         });
       }
     }
@@ -371,7 +378,7 @@ export class MeetAdapter {
     if (headerCount === 1) {
       // Exactly 1 person in the meeting: it's the current user!
       const selfName = this.getSelfName();
-      participants = [{ displayName: selfName, isHost: false, isSelf: true }];
+      participants = [{ displayName: selfName, isHost: false, isSelf: true, isLocalUser: true }];
     } else if (headerCount !== null && headerCount > 0 && participants.length > headerCount) {
       participants = participants.slice(0, headerCount);
     }
