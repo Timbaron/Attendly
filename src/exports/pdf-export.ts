@@ -73,17 +73,20 @@ export function generatePdfDocument(data: MeetingAttendanceData): jsPDF {
   doc.text(`Early Departures: ${stats.earlyDepartures}`, 155, 58);
 
   // 3. Table of Participants
-  const tableData = Object.values(data.participants).map((p) => [
-    p.displayName,
-    p.status.toUpperCase(),
-    formatTime(p.firstJoinedAt, data.config.timeFormat),
-    p.lastLeftAt ? formatTime(p.lastLeftAt, data.config.timeFormat) : "—",
-    formatDuration(p.totalDurationMs),
-    p.attendancePercentage !== null ? `${p.attendancePercentage}%` : "N/A",
-    p.isLate ? "Late" : "On-time",
-    p.leftEarly ? "Yes" : "No",
-    p.identityConfidence.toUpperCase(),
-  ]);
+  const tableData = Object.values(data.participants).map((p) => {
+    const isEstimated = p.sessions.some((s) => s.confidence === "estimated");
+    return [
+      p.displayName,
+      p.status.toUpperCase(),
+      formatTime(p.firstJoinedAt, data.config.timeFormat) + (p.presentAtTrackingStart ? " (start)" : ""),
+      p.lastLeftAt ? formatTime(p.lastLeftAt, data.config.timeFormat) : "—",
+      formatDuration(p.totalDurationMs),
+      p.attendancePercentage !== null ? `${p.attendancePercentage}%` : "N/A",
+      p.isLate ? "Late" : "On-time",
+      p.leftEarly ? "Yes" : "No",
+      isEstimated ? "ESTIMATED" : p.identityConfidence.toUpperCase(),
+    ];
+  });
 
   autoTable(doc, {
     startY: 68,
